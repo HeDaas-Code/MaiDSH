@@ -1,0 +1,10 @@
+# maidsh bundle patch: 宿主插件（系统提示词注入 + /maidsh 面板 + /maidsh-api）
+# 与 client 设定页（settings.section「人格」）。
+#
+# name 必须是实际包名 maidsh —— cordis 按 name import 包，
+# 写错会导致 Cannot find package 'maidsh'。
+# 纯 insert(id/name) 可热挂载免重启；配置不在这里写死，
+# 全部落在 ~/.dsh/maidsh/settings.json，由设定页 / 面板读写。
+- insert:
+    - id: maidsh
+      name: maidsh

@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>maidsh · 人格面板</title>
+<style>
+  :root{
+    --bg:#0f1115; --layer1:#171a21; --layer2:#1f232c; --border:#2a2f3a;
+    --text:#e6e8ec; --dim:#9aa2b1; --brand:#5b8cff; --ok:#3fb950; --warn:#d29922; --err:#e5484d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+  header{position:sticky;top:0;z-index:10;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--border);padding:14px 22px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  header h1{margin:0;font-size:16px;font-weight:600;letter-spacing:.01em}
+  header .sub{font-size:12px;color:var(--dim)}
+  header .spacer{flex:1}
+  main{padding:22px;max-width:1180px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+  .card{background:var(--layer1);border:1px solid var(--border);border-radius:12px;padding:14px}
+  .card .k{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em}
+  .card .v{font-size:24px;font-weight:600;margin-top:4px;font-variant-numeric:tabular-nums}
+  section{background:var(--layer1);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+  section > .head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+  section > .head h2{margin:0;font-size:14px;font-weight:600}
+  section > .head .spacer{flex:1}
+  section > .body{padding:14px 16px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{font-size:11px;color:var(--dim);font-weight:500;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  td.num{font-variant-numeric:tabular-nums;color:var(--dim);white-space:nowrap}
+  input,textarea,select,button{font-family:inherit;font-size:13px}
+  input[type=text],input[type=number],textarea{background:var(--layer2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px;outline:none;width:100%}
+  input[type=text]:focus,textarea:focus{border-color:var(--brand)}
+  textarea{resize:vertical;line-height:1.6}
+  button{background:var(--layer2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 13px;cursor:pointer;transition:border-color .12s,background .12s}
+  button:hover{border-color:var(--brand)}
+  button:disabled{opacity:.5;cursor:default}
+  button.primary{background:var(--brand);border-color:var(--brand);color:#fff}
+  button.danger:hover{border-color:var(--err);color:var(--err)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .dim{color:var(--dim)}
+  .small{font-size:12px}
+  .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;border:1px solid var(--border);color:var(--dim)}
+  .pill.ok{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 40%,var(--border))}
+  .pill.err{color:var(--err);border-color:color-mix(in srgb,var(--err) 40%,var(--border))}
+  .empty{padding:18px;text-align:center;color:var(--dim);font-size:13px}
+  .toast{position:fixed;right:20px;bottom:20px;background:var(--layer2);border:1px solid var(--border);border-radius:10px;padding:10px 16px;font-size:13px;opacity:0;transform:translateY(8px);transition:all .2s ease;pointer-events:none;max-width:380px}
+  .toast.show{opacity:1;transform:none}
+  .toast.err{border-color:var(--err);color:var(--err)}
+  .mood-bar{height:6px;border-radius:999px;background:var(--layer2);overflow:hidden;min-width:60px}
+  .mood-bar > i{display:block;height:100%;background:var(--brand);border-radius:999px}
+  .tag{font-size:11px;padding:1px 7px;border-radius:6px;background:var(--layer2);color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <h1>maidsh 人格面板</h1>
+  <span class="sub">表达库 · 黑话 · 心情 · 印象 · 学习日志</span>
+  <span class="spacer"></span>
+  <button id="btn-refresh">刷新</button>
+  <button id="btn-learn" class="primary">立即学一轮</button>
+</header>
+
+<main>
+  <div class="cards" id="cards"></div>
+
+  <section>
+    <div class="head"><h2>表达库</h2><span class="pill" id="expr-count">0</span><span class="spacer"></span></div>
+    <div class="body">
+      <div class="row" style="margin-bottom:12px">
+        <input type="text" id="expr-situation" placeholder="情境（当……时）" style="flex:1;min-width:180px">
+        <input type="text" id="expr-style" placeholder="表达方式（可以用……）" style="flex:1;min-width:180px">
+        <button id="btn-add-expr">添加</button>
+      </div>
+      <div id="expr-list"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="head"><h2>黑话表</h2><span class="pill" id="jargon-count">0</span><span class="spacer"></span></div>
+    <div class="body">
+      <div class="row" style="margin-bottom:12px">
+        <input type="text" id="jargon-term" placeholder="词条" style="flex:1;min-width:140px">
+        <input type="text" id="jargon-meaning" placeholder="含义（可空）" style="flex:1;min-width:180px">
+        <button id="btn-add-jargon">添加</button>
+      </div>
+      <div id="jargon-list"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="head"><h2>心情时间线</h2><span class="pill" id="mood-count">0</span><span class="spacer"></span></div>
+    <div class="body"><div id="mood-list"></div></div>
+  </section>
+
+  <section>
+    <div class="head"><h2>聊天印象</h2><span class="pill" id="impr-count">0</span><span class="spacer"></span></div>
+    <div class="body"><div id="impr-list"></div></div>
+  </section>
+
+  <section>
+    <div class="head"><h2>学习日志</h2><span class="pill" id="log-count">0</span><span class="spacer"></span></div>
+    <div class="body"><div id="log-list"></div></div>
+  </section>
+
+  <section>
+    <div class="head">
+      <h2>人物画像</h2>
+      <span class="pill" id="profile-ver">—</span>
+      <span class="spacer"></span>
+      <button id="btn-profile-save" class="small">保存修改</button>
+    </div>
+    <div class="body">
+      <div class="small dim" style="margin-bottom:8px">
+        画像记录<b>这个人是谁</b>（身份 / 关系 / 偏好 / 雷点），跨会话累积；上面的「聊天印象」只记最近在聊什么。
+        自动更新会不断重写这段文本，手工改过之后照样会被下一轮覆盖——想长期固定就关掉设定里的「更新人物画像」。
+      </div>
+      <textarea id="profile-text" rows="14" spellcheck="false" placeholder="# 人物画像&#10;（还没有画像。正常聊天几轮后会自动长出来，也可以直接在这里写。）"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button id="btn-profile-history" class="small">看历史版本</button>
+        <span class="spacer"></span>
+        <button id="btn-profile-del" class="danger small">删除画像</button>
+      </div>
+      <div id="profile-history" class="small dim" style="margin-top:10px;white-space:pre-wrap"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="head"><h2>手动投喂</h2><span class="spacer"></span></div>
+    <div class="body">
+      <div class="small dim" style="margin-bottom:8px">贴一段聊天记录（每行一句），直接让模型学表达 / 黑话 / 生成印象，不必等真实对话累积。</div>
+      <textarea id="feed-text" rows="5" placeholder="一行一句，例如：&#10;这也太离谱了吧&#10;笑死我了哈哈哈哈&#10;yyds，真的顶"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button id="btn-feed-expr">学表达</button>
+        <button id="btn-feed-jargon">学黑话</button>
+        <button id="btn-feed-impr">生成印象</button>
+        <span class="spacer"></span>
+        <button id="btn-clear" class="danger small">清空全部学到的数据</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '/maidsh-api'
+const MOOD_LABELS = { happy:'开心', angry:'有点恼', sad:'低落', shy:'害羞', confused:'困惑', tired:'困倦', excited:'兴奋', calm:'平静' }
+
+const $ = (id) => document.getElementById(id)
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+const fmtTime = (ms) => {
+  if (!ms) return '—'
+  const d = new Date(Number(ms))
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+let toastTimer = 0
+function toast(msg, isErr) {
+  const el = $('toast')
+  el.textContent = msg
+  el.className = 'toast show' + (isErr ? ' err' : '')
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => { el.className = 'toast' }, 3200)
+}
+
+async function api(body, method) {
+  const res = await fetch(API, method === 'GET' ? { method: 'GET' } : {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  })
+  const data = await res.json().catch(() => ({ ok: false, error: '响应不是 JSON' }))
+  if (!data || data.ok === false) throw new Error((data && data.error) || '请求失败')
+  return data
+}
+
+function renderCards(stats) {
+  const items = [
+    ['口癖条数', stats.expressions],
+    ['黑话条数', stats.jargon],
+    ['心情记录', stats.moods],
+    ['聊天印象', stats.impressions],
+    ['人物画像', stats.profiles],
+    ['用户消息', stats.userMessages],
+    ['累计新增', stats.learnedNew],
+  ]
+  $('cards').innerHTML = items.map(([k, v]) =>
+    `<div class="card"><div class="k">${esc(k)}</div><div class="v">${Number(v) || 0}</div></div>`
+  ).join('')
+}
+
+function renderExpressions(rows) {
+  $('expr-count').textContent = rows.length
+  if (rows.length === 0) {
+    $('expr-list').innerHTML = '<div class="empty">还没有学到口癖。正常聊天，或到下面手动投喂一段。</div>'
+    return
+  }
+  $('expr-list').innerHTML = `<table><thead><tr><th>情境</th><th>表达方式</th><th>权重</th><th>用过</th><th></th></tr></thead><tbody>${
+    rows.map((r) => `<tr>
+      <td>${esc(r.situation)}</td>
+      <td>${esc(r.style)}</td>
+      <td class="num">${Number(r.weight).toFixed(1)}</td>
+      <td class="num">${r.hits}</td>
+      <td style="text-align:right"><button class="danger" data-del-expr="${r.id}">删</button></td>
+    </tr>`).join('')
+  }</tbody></table>`
+}
+
+function renderJargon(rows) {
+  $('jargon-count').textContent = rows.length
+  if (rows.length === 0) {
+    $('jargon-list').innerHTML = '<div class="empty">还没有黑话。它会在你反复用同一个怪词时被学出来。</div>'
+    return
+  }
+  $('jargon-list').innerHTML = `<table><thead><tr><th>词条</th><th>含义</th><th>出现</th><th></th></tr></thead><tbody>${
+    rows.map((r) => `<tr>
+      <td><span class="tag">${esc(r.term)}</span></td>
+      <td class="dim">${esc(r.meaning || '—')}</td>
+      <td class="num">${r.hits}</td>
+      <td style="text-align:right"><button class="danger" data-del-jargon="${r.id}">删</button></td>
+    </tr>`).join('')
+  }</tbody></table>`
+}
+
+function renderMood(rows) {
+  $('mood-count').textContent = rows.length
+  if (rows.length === 0) {
+    $('mood-list').innerHTML = '<div class="empty">还没有心情记录。它只在你说话带明显情绪时记一笔。</div>'
+    return
+  }
+  $('mood-list').innerHTML = `<table><thead><tr><th>时间</th><th>心情</th><th>强度</th><th>触发</th></tr></thead><tbody>${
+    rows.map((r) => `<tr>
+      <td class="num">${fmtTime(r.createdAt)}</td>
+      <td>${esc(MOOD_LABELS[r.mood] || r.mood)}</td>
+      <td><div class="mood-bar"><i style="width:${Math.min(100, Math.round(Number(r.intensity) / 5 * 100))}%"></i></div></td>
+      <td class="dim small">${esc(r.reason || '')}</td>
+    </tr>`).join('')
+  }</tbody></table>`
+}
+
+function renderImpressions(rows) {
+  $('impr-count').textContent = rows.length
+  if (rows.length === 0) {
+    $('impr-list').innerHTML = '<div class="empty">还没有聊天印象。</div>'
+    return
+  }
+  $('impr-list').innerHTML = `<table><thead><tr><th>时间</th><th>印象</th></tr></thead><tbody>${
+    rows.map((r) => `<tr><td class="num">${fmtTime(r.createdAt)}</td><td>${esc(r.text)}</td></tr>`).join('')
+  }</tbody></table>`
+}
+
+function renderProfile(p) {
+  const ta = $('profile-text')
+  // 只在用户没在编辑时覆盖，避免后台刷新吃掉正在敲的字
+  if (document.activeElement !== ta) {
+    ta.value = (p && p.profileText) || ''
+  }
+  $('profile-ver').textContent = p ? `v${p.version}` : '未建立'
+  $('btn-profile-del').disabled = !p
+  $('btn-profile-history').disabled = !p
+}
+
+function renderProfileHistory(rows) {
+  const box = $('profile-history')
+  if (!rows || rows.length === 0) { box.textContent = '没有更早的版本。'; return }
+  box.innerHTML = rows.map((r) =>
+    `<details style="margin-bottom:6px"><summary>v${r.version} · ${esc(fmtTime(r.createdAt))}</summary>`
+    + `<pre style="white-space:pre-wrap;margin:6px 0 0;font-size:12px">${esc(r.profileText)}</pre></details>`
+  ).join('')
+}
+
+function renderLog(rows) {
+  $('log-count').textContent = rows.length
+  if (rows.length === 0) {
+    $('log-list').innerHTML = '<div class="empty">还没有学习记录。</div>'
+    return
+  }
+  $('log-list').innerHTML = `<table><thead><tr><th>时间</th><th>类型</th><th>结果</th><th>详情</th></tr></thead><tbody>${
+    rows.map((r) => `<tr>
+      <td class="num">${fmtTime(r.createdAt)}</td>
+      <td>${esc(r.kind)}</td>
+      <td><span class="pill ${r.ok ? 'ok' : 'err'}">${r.ok ? '成功' : '失败'}</span></td>
+      <td class="dim small">${esc(r.detail || '')}</td>
+    </tr>`).join('')
+  }</tbody></table>`
+}
+
+async function load() {
+  try {
+    const d = await api(null, 'GET')
+    renderCards(d.stats || {})
+    renderExpressions(d.expressions || [])
+    renderJargon(d.jargon || [])
+    renderMood(d.mood || [])
+    renderImpressions(d.impressions || [])
+    renderProfile(d.profile)
+    renderLog(d.log || [])
+    const s = d.settings || {}
+    const onOff = s.enabled === false ? '总开关已关闭' : '人格注入生效中'
+    document.querySelector('header .sub').textContent = `${onOff} · 昵称「${s.nickname || '—'}」`
+  } catch (e) {
+    toast(e.message, true)
+  }
+}
+
+// ── 事件绑定 ──
+$('btn-refresh').onclick = () => load()
+
+$('btn-profile-save').onclick = async () => {
+  const text = $('profile-text').value
+  if (!text.trim()) { toast('画像不能是空的，要清掉请用「删除画像」', true); return }
+  try {
+    const r = await api({ op: 'saveProfileText', text })
+    toast(`已保存为 v${r.version}`)
+    await load()
+  } catch (e) { toast(e.message, true) }
+}
+
+$('btn-profile-history').onclick = async () => {
+  try {
+    const d = await api(null, 'GET')
+    // GET 已经带 profileHistory，直接用，省一次请求
+    renderProfileHistory(d.profileHistory || [])
+  } catch (e) { toast(e.message, true) }
+}
+
+$('btn-profile-del').onclick = async () => {
+  if (!confirm('删掉整份人物画像（含历史版本）？')) return
+  try {
+    await api({ op: 'deleteProfile' })
+    $('profile-history').textContent = ''
+    toast('画像已删除')
+    await load()
+  } catch (e) { toast(e.message, true) }
+}
+
+$('btn-learn').onclick = async () => {
+  const btn = $('btn-learn')
+  btn.disabled = true
+  btn.textContent = '学习中…'
+  try {
+    await api({ op: 'forceLearn' })
+    toast('已跑完一轮学习')
+    await load()
+  } catch (e) {
+    toast(e.message, true)
+  } finally {
+    btn.disabled = false
+    btn.textContent = '立即学一轮'
+  }
+}
+
+$('btn-add-expr').onclick = async () => {
+  const situation = $('expr-situation').value.trim()
+  const style = $('expr-style').value.trim()
+  if (!situation || !style) return toast('情境和表达方式都要填', true)
+  try {
+    await api({ op: 'addExpression', situation, style })
+    $('expr-situation').value = ''
+    $('expr-style').value = ''
+    toast('已添加')
+    await load()
+  } catch (e) { toast(e.message, true) }
+}
+
+$('btn-add-jargon').onclick = async () => {
+  const term = $('jargon-term').value.trim()
+  const meaning = $('jargon-meaning').value.trim()
+  if (!term) return toast('词条不能为空', true)
+  try {
+    await api({ op: 'addJargon', term, meaning })
+    $('jargon-term').value = ''
+    $('jargon-meaning').value = ''
+    toast('已添加')
+    await load()
+  } catch (e) { toast(e.message, true) }
+}
+
+document.addEventListener('click', async (ev) => {
+  const delExpr = ev.target.getAttribute && ev.target.getAttribute('data-del-expr')
+  const delJargon = ev.target.getAttribute && ev.target.getAttribute('data-del-jargon')
+  if (delExpr) {
+    try { await api({ op: 'deleteExpression', id: Number(delExpr) }); toast('已删除'); await load() }
+    catch (e) { toast(e.message, true) }
+  }
+  if (delJargon) {
+    try { await api({ op: 'deleteJargon', id: Number(delJargon) }); toast('已删除'); await load() }
+    catch (e) { toast(e.message, true) }
+  }
+})
+
+const feed = () => $('feed-text').value.trim()
+
+$('btn-feed-expr').onclick = async () => {
+  const text = feed()
+  if (!text) return toast('先贴一段文本', true)
+  try {
+    const r = await api({ op: 'learnFromText', text })
+    toast(`候选 ${r.candidates} 条，新增 ${r.learned} 条`)
+    await load()
+  } catch (e) { toast(e.message, true) }
+}
+
+$('btn-feed-jargon').onclick = async () => {
+  const text = feed()
+  if (!text) return toast('先贴一段文本', true)
+  try {
+    const r = await api({ op: 'learnJargonFromText', text })
+    toast(`候选 ${r.candidates} 个，新增 ${r.learned} 个`)
+    await load()
+  } catch (e) { toast(e.message, true) }
+}
+
+$('btn-feed-impr').onclick = async () => {
+  const text = feed()
+  if (!text) return toast('先贴一段文本', true)
+  try {
+    const r = await api({ op: 'makeImpression', text })
+    toast(r.impression ? '印象已生成' : '模型没给出印象')
+    await load()
+  } catch (e) { toast(e.message, true) }
+}
+
+$('btn-clear').onclick = async () => {
+  if (!window.confirm('清空全部学到的口癖、黑话、心情、印象、日志？此操作不可撤销（人格设定不受影响）。')) return
+  try {
+    for (const table of ['expressions', 'jargon', 'mood', 'impressions', 'learn_log']) {
+      await api({ op: 'clearTable', table })
+    }
+    toast('已清空')
+    await load()
+  } catch (e) { toast(e.message, true) }
+}
+
+load()
+</script>
+</body>
+</html>

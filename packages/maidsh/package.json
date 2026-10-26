@@ -1,0 +1,46 @@
+{
+  "name": "maidsh",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MaiBot 式人格拟人化：人格设定 + 表达/黑话学习 + 心情 + 聊天印象，注入 DSH 系统提示词",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "lib/",
+    "webui/",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "maidsh",
+    "deepseek-harness",
+    "persona",
+    "maibot"
+  ],
+  "license": "MIT",
+  "scripts": {
+    "test": "node test/integration.mjs"
+  }
+}

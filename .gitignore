@@ -1,0 +1,13 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 运行期数据（真源在 $DSH_HOME/maidsh/，不进仓库）
+*.db
+*.db-shm
+*.db-wal
+
+# 日志与临时产物
+*.log
+.dsh-hmr/
+.DS_Store
