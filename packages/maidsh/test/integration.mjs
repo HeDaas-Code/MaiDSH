@@ -49,7 +49,19 @@ function makeCtx({ replies }) {
           resolveCallConfig: async (o) => ({ ...o }),
           prepareCall: async () => ({
             stream: async function* (args) {
-              const prompt = args.messages[0].content
+              // ⚠️ 替身必须和真宿主一样挑剔，否则测不出真问题：
+              // 宿主派发前跑 `assertSupportedHistory()`，里面是
+              // `message.content.some(...)`（dsh-llm-pi-ai/lib/index.js:1184）。
+              // 这里若宽容地接受字符串，就永远发现不了
+              // 「content.some is not a function」——线上已经栽过一次。
+              for (const m of args.messages) {
+                assert.ok(Array.isArray(m.content), '消息 content 必须是内容块数组（宿主断言要求）: ' + typeof m.content)
+                for (const block of m.content) {
+                  assert.equal(block.type, 'text', 'text 块必须有 type: text')
+                  assert.equal(typeof block.text, 'string', 'text 块必须有字符串 text')
+                }
+              }
+              const prompt = args.messages[0].content.map((b) => b.text).join('\n')
               yield { type: 'text-delta', text: replies(prompt) }
               yield { type: 'finish', reason: { kind: 'stop' } }
             },
@@ -502,6 +514,40 @@ test('学习阈值计数落库，重启不归零', async () => {
   const reopened = store.openStore()
   assert.equal(store.readCounter(reopened, 'since_learn'), 7, '计数应持久化（内存变量重启即丢）')
   store.setCounter(db, 'since_learn', 0)
+})
+
+test('学习步骤互相隔离：一步失败不连坐其余步骤', async () => {
+  // 只有「表达」那一步的提示词让它抛；其余照常返回。
+  // 这条用例是为了守住一个真实事故：原先 runOnce 拿一个大 try 罩住四步，
+  // 表达学习一抛，黑话/印象/画像全被跳过，四个子系统一起零产出。
+  const ctx = makeCtx({
+    replies: (prompt) => {
+      if (prompt.includes('situation') && prompt.includes('style')) throw new Error('表达这步坏了')
+      return defaultReplies(prompt)
+    },
+  })
+  plugin.apply(ctx)
+  const fire = ctx.__listeners.get('session/event')
+  const s = settingsMod.createSettingsStore()
+  s.write({ learnEvery: 1, learnProfile: false })
+  const db = store.openStore()
+  store.clearTable(db, 'expressions')
+  store.clearTable(db, 'jargon')
+  const jBefore = store.listJargon(db, 100).length
+
+  for (const text of ['今天写了半天代码', '又报错了', '哎', '继续弄', '快了', '搞定']) {
+    fire({ id: 'sess-isolate' }, userEvent(text))
+    fire({ id: 'sess-isolate' }, assistantEvent('嗯'))
+  }
+  await new Promise((r) => setTimeout(r, 500))
+  s.write({ learnEvery: 20, learnProfile: true })
+
+  const logs = store.listLearnLog(db, 50)
+  const errs = logs.filter((l) => l.ok === false)
+  assert.ok(errs.some((l) => l.detail.includes('表达学习失败')), '失败条目应点名是哪一步: ' + JSON.stringify(errs))
+  assert.equal(store.topExpressions(db, 100).length, 0, '表达那步确实失败了，不该有产出')
+  assert.ok(store.listJargon(db, 100).length > jBefore, '黑话那步不该被表达的失败连坐')
+  store.clearTable(db, 'jargon')
 })
 
 // ── 跑 ──────────────────────────────────────────────────────────────

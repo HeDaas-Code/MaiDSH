@@ -187,6 +187,7 @@ function renderCards(stats) {
     ['人物画像', stats.profiles],
     ['用户消息', stats.userMessages],
     ['学习轮次', stats.learnRuns],
+    ['学习失败', stats.learnErrors],
     ['距下轮还差', stats.sinceLearn],
   ]
   $('cards').innerHTML = items.map(([k, v]) =>

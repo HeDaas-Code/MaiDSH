@@ -372,7 +372,11 @@ export function stats(db) {
     moods: one('SELECT COUNT(*) FROM mood'),
     impressions: one('SELECT COUNT(*) FROM impressions'),
     profiles: one('SELECT COUNT(*) FROM person_profile'),
-    learnRuns: one("SELECT COUNT(*) FROM learn_log WHERE kind = 'learn'"),
+    // 真正跑过的学习轮次（成功与失败都算一轮）。早先这里数的是 learn_log 的行数，
+    // 一轮里四个子系统各报一次错就显示成「学了四轮」——数字在骗人。
+    learnRuns: readCounter(db, 'learn_runs'),
+    // 累计失败的学习步骤数（同一轮可能多个），面板要能把「有错」直接摆出来
+    learnErrors: readCounter(db, 'learn_errors'),
     userMessages: readCounter(db, 'user_messages'),
     learnedNew: readCounter(db, 'learned_new'),
     // 距下一轮学习还差几条——面板要能回答「它到底在不在动」，

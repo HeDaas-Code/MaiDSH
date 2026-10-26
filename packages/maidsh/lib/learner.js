@@ -314,17 +314,22 @@ export function createLearner(ctx, db, getConfig) {
     if (!cfg.enabled || !cfg.learning) return
     running = true
     const batch = buffer.slice(-MAX_BATCH_MESSAGES)
-    try {
-      if (cfg.learnExpressions) {
-        await learnExpressions(ctx, db, batch, { session, maxTokens: cfg.learnMaxTokens })
-      }
-      if (cfg.learnJargon) {
-        await learnJargon(ctx, db, batch, { session })
-      }
-      if (cfg.learnImpression) {
-        await learnImpression(ctx, db, batch, { session })
-      }
-      if (cfg.learnProfile && shouldRefreshProfile(db, cfg)) {
+    // 每一步**各自** try/catch，不再拿一个大 try 罩住四步。
+    // 罩住过的后果是实测到的：表达学习第一次调用就抛（消息形状不合法），
+    // 于是黑话/印象/画像整轮全被跳过，四个子系统一起零产出，日志里只剩一条
+    // 语焉不详的失败 —— 一个坏零件把整台机器停掉，排查时看不出是谁坏的。
+    const steps = []
+    if (cfg.learnExpressions) {
+      steps.push(['表达', () => learnExpressions(ctx, db, batch, { session, maxTokens: cfg.learnMaxTokens })])
+    }
+    if (cfg.learnJargon) {
+      steps.push(['黑话', () => learnJargon(ctx, db, batch, { session })])
+    }
+    if (cfg.learnImpression) {
+      steps.push(['印象', () => learnImpression(ctx, db, batch, { session })])
+    }
+    if (cfg.learnProfile && shouldRefreshProfile(db, cfg)) {
+      steps.push(['画像', async () => {
         const res = await learnProfile(ctx, db, batch, {
           session,
           personId: cfg.profilePersonId || 'local-user',
@@ -337,19 +342,38 @@ export function createLearner(ctx, db, getConfig) {
         if (res && res.updated) {
           try { setCounter(db, 'since_profile', 0) } catch { /* 记账失败不影响学习 */ }
         }
-      }
-    } catch (error) {
-      // 后台学习失败只记日志，不向会话抛（否则会把失败冒泡成对话错误）
-      try {
-        ctx.logger.warn('maidsh: 学习失败: ' + ((error && error.message) || String(error)))
-      } catch { /* logger 不可用时静默 */ }
-      logLearning(db, { kind: 'learn', ok: false, detail: String((error && error.message) || error) })
-    } finally {
-      running = false
-      // 学完清零**持久化**的计数（旧版清的是内存变量，重启即归零，导致
-      // 断断续续聊天永远攒不到阈值——2026-10-26 修）。
-      try { setCounter(db, 'since_learn', 0) } catch { /* 记账失败不影响学习 */ }
+        return res
+      }])
     }
+
+    let learnedTotal = 0
+    let failed = 0
+    for (const [label, run] of steps) {
+      try {
+        const res = await run()
+        learnedTotal += Number(res && res.learned) || 0
+      } catch (error) {
+        failed += 1
+        const detail = (error && error.message) || String(error)
+        // 后台学习失败只记日志，不向会话抛（否则会把失败冒泡成对话错误）
+        try { ctx.logger.warn(`maidsh: ${label}学习失败: ` + detail) } catch { /* logger 不可用时静默 */ }
+        logLearning(db, { kind: 'learn', ok: false, detail: `${label}学习失败: ` + detail })
+      }
+    }
+
+    try {
+      // 轮次计数（含失败）：面板的「学习轮次」要反映**跑了多少轮**。
+      // 早先这里是拿 learn_log 的行数冒充的，于是一轮里四个子系统各报一次错就
+      // 显示成「学了四轮」，而真正跑完的轮数反而被失败条目淹掉。
+      bumpCounter(db, 'learn_runs', 1)
+      if (failed > 0) bumpCounter(db, 'learn_errors', failed)
+    } catch { /* 记账失败不影响学习 */ }
+
+    running = false
+    // 学完清零**持久化**的计数（旧版清的是内存变量，重启即归零，导致
+    // 断断续续聊天永远攒不到阈值——2026-10-26 修）。
+    try { setCounter(db, 'since_learn', 0) } catch { /* 记账失败不影响学习 */ }
+    return { learned: learnedTotal, failed }
   }
 
   return {

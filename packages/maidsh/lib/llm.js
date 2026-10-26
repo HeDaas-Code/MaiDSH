@@ -34,7 +34,13 @@ export async function callModel(ctx, prompt, opts = {}) {
   const prepared = await llm.prepareCall(base)
   let out = ''
   let reason = ''
-  for await (const chunk of prepared.stream({ ...base, messages: [{ role: 'user', content: prompt }] })) {
+  // ⚠️ `content` 必须是**内容块数组**，不能直接给字符串。
+  // 宿主在派发前会跑 `assertSupportedHistory()`，里面是
+  // `message.content.some(...)`（dsh-llm-pi-ai/lib/index.js:1184），
+  // 给字符串就报 `content.some is not a function`，整轮学习静默失败。
+  // 这个坑当初没被测试拦住，是因为替身 ctx 比真宿主宽松 —— 见 test 里的同名守卫。
+  const messages = [{ role: 'user', content: [{ type: 'text', text: String(prompt) }] }]
+  for await (const chunk of prepared.stream({ ...base, messages })) {
     if (chunk.type === 'text-delta') out += chunk.text
     else if (chunk.type === 'reasoning-delta') reason += chunk.text
     else if (chunk.type === 'finish' && chunk.reason && chunk.reason.kind === 'error') {
