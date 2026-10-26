@@ -31,7 +31,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
-import { openStore, databasePath, resolveDshHome, stats, topExpressions, listJargon, moodTimeline, listImpressions, listLearnLog, bumpCounter, readCounter, addExpression, addJargon, deleteExpression, deleteJargon, clearTable, recordMood, latestMood, getProfile, upsertProfile, listProfiles, deleteProfile, profileHistory } from './lib/store.js'
+import { openStore, databasePath, resolveDshHome, stats, topExpressions, sampleExpressions, touchExpressions, listJargon, moodTimeline, listImpressions, listLearnLog, bumpCounter, readCounter, addExpression, addJargon, deleteExpression, deleteJargon, clearTable, recordMood, latestMood, getProfile, upsertProfile, listProfiles, deleteProfile, profileHistory } from './lib/store.js'
 import { createSettingsStore, defaultSettings, settingsPath } from './lib/settings.js'
 import { createLearner, learnExpressions, learnJargon, learnImpression, learnProfile } from './lib/learner.js'
 import { buildSections } from './lib/prompt.js'
@@ -130,6 +130,40 @@ export function apply(ctx) {
     return st
   }
 
+  /**
+   * 取本回合该注入的表达方式（按回合缓存 + 加权抽签）。
+   *
+   * 缓存键是 `st.turn`：它只在真实用户消息到来时 +1，所以同一回合内的每次
+   * assemble 拿到的是同一批（文本稳定 → 宿主不追加快照），下一回合才换一批。
+   *
+   * `st.expressions` 上顺带记 `limit`，设定里改了条数要立刻生效而不是等下一回合。
+   *
+   * @param {object} st 会话内存态
+   * @param {object} cfg 归一化设定
+   */
+  function expressionsForTurn(st, cfg) {
+    const limit = Math.max(1, Math.min(50, Number(cfg.expressionLimit) || 8))
+    if (st.expressions && st.expressionsLimit === limit && st.expressionsTurn === st.turn) {
+      return st.expressions
+    }
+    let picked = []
+    try {
+      picked = sampleExpressions(db, limit)
+    } catch {
+      // 抽签失败退回排行榜（宁可注入固定几条，也不要整块消失）
+      try { picked = topExpressions(db, limit) } catch { picked = [] }
+    }
+    st.expressions = picked
+    st.expressionsLimit = limit
+    st.expressionsTurn = st.turn
+    // 抽中即记账：hits 反映「这条被拿到模型面前过几次」，与学习时的 weight 分开，
+    // 面板上能看出哪些句式在真正参与对话。只在真正重抽时记，避免虚高。
+    if (picked.length > 0) {
+      try { touchExpressions(db, picked.map((e) => e.id)) } catch { /* 记账失败不影响注入 */ }
+    }
+    return picked
+  }
+
   // ── 会话事件：推进心情、喂学习缓冲、计数 ────────────────────────────────
   ctx.effect(() => ctx.on('session/event', (session, event) => {
     try {
@@ -190,7 +224,14 @@ export function apply(ctx) {
       if (cfg.enabled && assembly && Array.isArray(assembly.contexts)) {
         const sid = sessionIdOf(hostCtx && hostCtx.agent && hostCtx.agent.session)
         const st = sessionState(sid)
-        const expressions = cfg.injectExpressions ? topExpressions(db, cfg.expressionLimit) : []
+        // 表达方式用**加权随机抽签**而不是取排行榜前 N：固定注入权重最高的那几条，
+        // 聊久了句式会反复撞车。抽签让每次注入的语料不同（MaiBot weighted_sample 等价物）。
+        //
+        // ⚠️ 抽签结果必须**按回合缓存**，不能每次 assemble 都重抽：
+        // 宿主按渲染文本去重，文本一变就追加一份新的上下文快照（每份 ~250 token）。
+        // 一个回合里 assemble 会被调用多次（每步一次），每步重抽 = 每步多一份快照，
+        // 上下文当场爆炸。所以同一回合内复用同一批，回合换了才重抽。
+        const expressions = cfg.injectExpressions ? expressionsForTurn(st, cfg) : []
         const jargon = cfg.injectJargon ? listJargon(db, cfg.jargonLimit) : []
         const impressions = cfg.injectImpression && cfg.impressionLimit > 0 ? listImpressions(db, cfg.impressionLimit) : []
         const mood = cfg.injectMood ? st.mood : null

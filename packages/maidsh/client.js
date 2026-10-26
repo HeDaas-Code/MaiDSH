@@ -244,7 +244,7 @@ window.__ModuleLoader__.load({
           React.createElement('div', { className: 'ms-row' },
             React.createElement(Field, {
               label: '每多少条用户消息学一轮',
-              hint: 'MaiBot 按消息数触发学习的等价物。',
+              hint: 'MaiBot 按消息数触发学习的等价物。计数落库，重启不清零；缓冲不足 6 条时先攒着不学。',
             }, React.createElement('input', {
               type: 'number', min: 1, max: 200, value: s.learnEvery, style: { width: 100 },
               onChange: (e) => set({ learnEvery: Number(e.target.value) }),

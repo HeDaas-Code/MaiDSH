@@ -75,8 +75,14 @@ export function defaultSettings() {
     learnImpression: true,
     /** 更新人物画像（七段结构化，跨会话累积）。 */
     learnProfile: true,
-    /** 每多少条用户消息触发一轮学习（MaiBot 按消息数触发的等价物）。 */
-    learnEvery: 20,
+    /**
+     * 每多少条用户消息触发一轮学习（MaiBot 按消息数触发的等价物）。
+     *
+     * 定成 12 而不是 20：计数现在落库、重启不清零，12 条大约两三次对话就能
+     * 攒够，学习在「用起来的第一天」就有产出。再低（比如 3）会让每次学习都
+     * 拿几句零碎话去总结，反而学到噪声。
+     */
+    learnEvery: 12,
     /** 学习请求的 maxTokens。 */
     learnMaxTokens: 1200,
 

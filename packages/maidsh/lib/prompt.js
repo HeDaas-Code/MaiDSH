@@ -43,11 +43,25 @@ export function renderPersona(cfg) {
     if (incremental) lines.push(`你的行为风格：${incremental}`)
   }
   lines.push('你就是你自己，不是"助手"、不是"AI 工具"。说话时不要自称助手，不要解释自己在扮演谁。')
+  lines.push('你有自己的判断和脾气：可以不同意、可以吐槽、可以拒绝，不用什么都顺着说，也不用刻意讨好。')
+  lines.push('不要提"设定""扮演""人格""AI"这类词，就当自己是本人，说话带着自己的立场和偏好。')
   return lines.join('\n')
 }
 
 /**
  * 渲染表达风格块。
+ *
+ * 这一段是「拟人感」真正的落点，所以写得比别处都重。三条经验（都是踩出来的）：
+ *
+ *   ① **留了逃生口就等于没有规则。** 早先那句「只有用户明确要方案/代码/长文时
+ *      才展开」，结果是：用户一问技术问题，模型就自认为拿到了许可，列表加粗
+ *      全上，然后「人格感」当场消失。现在逃生口只作用于**长度**，排版禁令
+ *      写成无条件的——「哪怕内容很长也不许」。
+ *   ② **禁令要给出可扫的符号。** 「不要用列表」太抽象，模型不一定认为自己在
+ *      用列表。补一条自检，点名 `-`、`*`、`#`、`1.`、`**`、`---` 这些**字符**，
+ *      发送前扫一遍就行。
+ *   ③ **要禁止的是具体句式，不是抽象品质。** 「不要啰嗦」没用；
+ *      「不要写"我帮你看看"」有用。所以开场白、过渡语、复述都点名。
  *
  * @param {object} cfg
  * @param {string} [temporaryStyle] 本轮抽中的备用风格（没有则空）
@@ -56,12 +70,14 @@ export function renderReplyStyle(cfg, temporaryStyle) {
   const lines = []
   if (cfg.replyStyle) lines.push(cfg.replyStyle)
   if (temporaryStyle) lines.push(`本轮额外要求：${temporaryStyle}`)
-  // 这一段是「拟人感」的落点：把 MaiBot 回复器里那些分散的口语化要求收成一条。
   lines.push(
-    '回复要日常、口语化，像人在手机上打字：可以短、可以不完整、可以只有几个字或一个符号。',
-    '不要用列表、标题、加粗、分隔线这类排版；不要写"首先/其次/总结"；不要复述用户说过的话。',
-    '不要输出多余内容（前后缀、冒号、引号、括号说明），只给回复本身。',
-    '只有用户明确要方案/代码/长文时才展开；其余场合越短越像人。',
+    '【怎么说】像人在手机上打字：可以短、可以不完整、可以只有几个字或一个符号。省略主语、倒装、语气词、半截话都正常，不用把话说圆。',
+    '默认一两句话。只有用户明确要方案、代码或长文时才展开；其余场合越短越像人。',
+    '【排版禁令，无条件】不要用列表、编号、标题、加粗、分隔线，哪怕内容再长也不许。要分点就用大白话连着说，"一个是…另一个是…"这样。',
+    '不要写"首先/其次/最后/总结一下/综上所述"，不要复述用户说过的话。',
+    '不要开场白和过渡语（"好的"、"我帮你看看"、"让我想想"、"简单来说"），直接给内容。',
+    '不要多余内容：前后缀、冒号、引号、括号补充说明、表情的文字说明，都不要。',
+    '【发送前自检】扫一遍你写的东西：出现 `- `、`* `、`# `、`1. `、`**`、`---` 中任何一个，就说明你在排版，删掉重写成大白话。',
   )
   return lines.join('\n')
 }
@@ -124,6 +140,27 @@ export function renderJargon(jargon) {
 }
 
 /**
+ * 渲染「临门一脚」风格锚点 —— 放在所有块的**最末位**。
+ *
+ * 为什么值得多花这 60 来个 token：系统提示词是一长串，越靠前的内容在生成时
+ * 越容易被稀释。前面的人格块与风格块隔着黑话、心情、画像，等到真正落笔时
+ * 权重已经掉下去了——技术长答尤其明显，一展开就回到「助手腔」。
+ *
+ * 所以末尾放一条极短、可扫的复述。它不复述全部规则，只留三条最容易破的。
+ *
+ * @param {object} cfg
+ */
+export function renderAnchor(cfg) {
+  const name = cfg && cfg.nickname ? String(cfg.nickname).trim() : ''
+  const lines = [
+    name ? `（临门提醒：你是${name}，不是助手。）` : '（临门提醒：你是你自己，不是助手。）',
+    '像人在手机上打字：短、口语、能省就省。不要列表、编号、标题、加粗、分隔线。',
+    '有脾气就带出来，不用一直客气；不知道就说不知道，别硬圆。',
+  ]
+  return lines.join('\n')
+}
+
+/**
  * 组装全部注入块。
  *
  * @param {object} params
@@ -170,6 +207,11 @@ export function buildSections({ cfg, temporaryStyle, expressions, jargon, impres
     // 画像放最后：它是背景信息，越靠近回复指令越容易被当成立即要执行的事。
     const text = renderProfile(profileText, cfg.profileRecentLimit)
     if (text) sections.push({ name: 'maidsh:profile', text })
+  }
+  if (cfg.injectReplyStyle) {
+    // 锚点必须排在最末，理由见 renderAnchor。
+    const text = renderAnchor(cfg)
+    if (text) sections.push({ name: 'maidsh:anchor', text })
   }
 
   // 统一做 `{{` 转义（宿主严格插值），且只改注入副本。

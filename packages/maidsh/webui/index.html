@@ -186,7 +186,8 @@ function renderCards(stats) {
     ['聊天印象', stats.impressions],
     ['人物画像', stats.profiles],
     ['用户消息', stats.userMessages],
-    ['累计新增', stats.learnedNew],
+    ['学习轮次', stats.learnRuns],
+    ['距下轮还差', stats.sinceLearn],
   ]
   $('cards').innerHTML = items.map(([k, v]) =>
     `<div class="card"><div class="k">${esc(k)}</div><div class="v">${Number(v) || 0}</div></div>`

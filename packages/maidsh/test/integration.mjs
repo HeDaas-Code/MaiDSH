@@ -160,6 +160,10 @@ test('system-prompt/assemble 注入人格块且块名正确', async () => {
   assert.ok(names.includes('maidsh:reply-style'), '缺表达风格块')
   const persona = assembly.contexts.find((c) => c.name === 'maidsh:persona')
   assert.ok(persona.text.includes('麦麦'), '人格块应含昵称')
+  // 锚点必须压在最后：越靠近生成的内容越不容易被稀释
+  assert.equal(names[names.length - 1], 'maidsh:anchor', '风格锚点应排在最后: ' + names.join(','))
+  const anchor = assembly.contexts[names.length - 1]
+  assert.ok(anchor.text.includes('不要列表'), '锚点应复述排版禁令')
 })
 
 test('注入文本不含裸 {{ （否则宿主插值抛错）', async () => {
@@ -213,6 +217,13 @@ test('总开关关闭时不注入任何块', async () => {
 })
 
 test('注入块每个 step 都 push（同一回合两次装配块数一致）', async () => {
+  // 先塞几条表达方式，让「加权抽签」这条路真的被走到 —— 空库时这个用例
+  // 测不出抽签是否稳定，等于没测。
+  const db0 = store.openStore()
+  store.clearTable(db0, 'expressions')
+  for (let i = 0; i < 10; i += 1) {
+    store.addExpression(db0, { situation: '情境' + i, style: '句式' + i, sourceText: 'x' })
+  }
   const ctx = makeCtx({ replies: defaultReplies })
   plugin.apply(ctx)
   const assemble = ctx.__listeners.get('system-prompt/assemble')
@@ -223,6 +234,7 @@ test('注入块每个 step 都 push（同一回合两次装配块数一致）', 
   await assemble(a2, host, () => {})
   assert.equal(a1.contexts.length, a2.contexts.length, '同回合两次装配块数必须一致')
   assert.deepEqual(a1.contexts.map((c) => c.text), a2.contexts.map((c) => c.text), '同回合注入文本必须逐字节稳定')
+  store.clearTable(db0, 'expressions')
 })
 
 // ── 4. 学习链路 ──────────────────────────────────────────────────────
@@ -237,10 +249,17 @@ test('攒够阈值后自动学一轮：表达 / 黑话 / 印象都入库', async
   const jBefore = store.listJargon(db, 100).length
 
   fire({ id: 'sess-learn' }, userEvent('你也太强了吧'))
+  fire({ id: 'sess-learn' }, assistantEvent('还好吧'))
   fire({ id: 'sess-learn' }, userEvent('yyds 真的'))
+  fire({ id: 'sess-learn' }, assistantEvent('这词你也用'))
   fire({ id: 'sess-learn' }, userEvent('绷不住了哈哈哈哈'))
+  fire({ id: 'sess-learn' }, assistantEvent('笑死'))
+  fire({ id: 'sess-learn' }, userEvent('今天又被拉去开会'))
+  fire({ id: 'sess-learn' }, assistantEvent('烦'))
+  fire({ id: 'sess-learn' }, userEvent('先不聊了，我去写代码'))
+  fire({ id: 'sess-learn' }, assistantEvent('行'))
   // 学习是后台异步（故意不 await），等它跑完
-  await new Promise((r) => setTimeout(r, 400))
+  await new Promise((r) => setTimeout(r, 500))
 
   assert.ok(store.topExpressions(db, 100).length > expBefore, '应学到表达方式')
   assert.ok(store.listJargon(db, 100).length > jBefore, '应学到黑话')
@@ -256,9 +275,13 @@ test('模型调用失败时不抛进会话（只记日志）', async () => {
   const fire = ctx.__listeners.get('session/event')
   const s = settingsMod.createSettingsStore()
   s.write({ learnEvery: 1 })
-  // 不应抛出
-  fire({ id: 'sess-fail' }, userEvent('随便说点什么'))
-  await new Promise((r) => setTimeout(r, 300))
+  // 缓冲必须喂过 MIN_BUFFER_FOR_LEARN（6 条），否则压根不会发起学习，
+  // 这个用例就测不到「学习失败如何收场」。
+  for (const text of ['随便说点什么', '再来一句', '第三句', '第四句', '第五句', '第六句']) {
+    fire({ id: 'sess-fail' }, userEvent(text))
+    fire({ id: 'sess-fail' }, assistantEvent('嗯'))
+  }
+  await new Promise((r) => setTimeout(r, 400))
   s.write({ learnEvery: 20 })
   const db = store.openStore()
   const logs = store.listLearnLog(db, 50)
@@ -421,6 +444,64 @@ test('心情跨进程重启能续上（sessionState 从库里恢复）', async (
   const mood = assembly.contexts.find((c) => c.name === 'maidsh:mood')
   assert.ok(mood, '重启后应能从库里恢复心情并注入')
   assert.ok(mood.text.includes('恼'), '恢复的应是 angry: ' + mood.text)
+})
+
+// ── 心情判据（弱词/强词）────────────────────────────────────────────
+test('心情：普通提问里的疑问词不再被判成「困惑」', async () => {
+  const moodMod = await import('../lib/mood.js')
+  // 这句曾把「为什么」「？」当强词命中，导致正经提问被注入困惑语气
+  assert.equal(moodMod.detectMood('为什么刚刚这几句对话感觉没有起作用？'), null)
+  assert.equal(moodMod.detectMood('把规则补强加厚，能优化的优化'), null)
+  assert.equal(moodMod.detectMood('？？？'), null, '光秃秃的问号不足以判情绪')
+})
+
+test('心情：强词仍然能判出情绪，强度按得分走', async () => {
+  const moodMod = await import('../lib/mood.js')
+  const happy = moodMod.detectMood('哈哈哈笑死我了')
+  assert.equal(happy.mood, 'happy')
+  assert.ok(happy.score >= 2, '多个强词应累加得分: ' + happy.score)
+  const angry = moodMod.detectMood('好烦啊，这破玩意又崩了')
+  assert.equal(angry.mood, 'angry')
+  const next = moodMod.advanceMood({ mood: 'happy', intensity: 2, createdAt: Date.now() - 60 * 60 * 1000 }, '今天天气不错')
+  assert.notEqual(next.mood, 'calm', '读不出情绪时应沿用旧心情并衰减，而不是清成平静')
+})
+
+// ── 表达注入：加权抽签 ────────────────────────────────────────────────
+test('表达注入用加权抽签，不是固定排行榜', async () => {
+  const db = store.openStore()
+  store.clearTable(db, 'expressions')
+  for (let i = 0; i < 12; i += 1) {
+    store.addExpression(db, { situation: '场景' + i, style: '句式' + i, sourceText: 'x' })
+  }
+  // 给第 0 条高权重，其余为默认
+  const rows = store.topExpressions(db, 100)
+  const hot = rows[rows.length - 1]
+  for (let i = 0; i < 10; i += 1) store.addExpression(db, { situation: hot.situation, style: hot.style, sourceText: 'x' })
+
+  // 两次抽签应不同（固定排行榜会完全一致）
+  const a = store.sampleExpressions(db, 4).map((e) => e.style).join(',')
+  const b = store.sampleExpressions(db, 4).map((e) => e.style).join(',')
+  assert.notEqual(a, b, '抽签结果不该每次相同: ' + a)
+
+  // 权重映射到 [1,5]：最高不超过最低的 5 倍
+  const w = store.computeSamplingWeights(store.topExpressions(db, 100))
+  assert.ok(Math.max(...w) <= 5 && Math.min(...w) >= 1, '权重应落在 [1,5]: ' + w.join(','))
+
+  // 高权重的句式在多次抽签里出现率应显著更高
+  let hotCount = 0
+  for (let i = 0; i < 200; i += 1) {
+    if (store.sampleExpressions(db, 3).some((e) => e.style === hot.style)) hotCount += 1
+  }
+  assert.ok(hotCount > 60, '高权重句式应更常被抽中，实际 ' + hotCount + '/200')
+  store.clearTable(db, 'expressions')
+})
+
+test('学习阈值计数落库，重启不归零', async () => {
+  const db = store.openStore()
+  store.setCounter(db, 'since_learn', 7)
+  const reopened = store.openStore()
+  assert.equal(store.readCounter(reopened, 'since_learn'), 7, '计数应持久化（内存变量重启即丢）')
+  store.setCounter(db, 'since_learn', 0)
 })
 
 // ── 跑 ──────────────────────────────────────────────────────────────

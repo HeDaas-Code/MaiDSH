@@ -17,7 +17,7 @@
 
 import { learnStylePrompt, evaluateExpressionsPrompt, learnJargonPrompt, impressionPrompt } from './prompts.js'
 import { callModel, parseJsonLoose } from './llm.js'
-import { addExpression, addJargon, addImpression, logLearning, bumpCounter, getProfile, upsertProfile } from './store.js'
+import { addExpression, addJargon, addImpression, logLearning, bumpCounter, setCounter, readCounter, getProfile, upsertProfile } from './store.js'
 import {
   classifyRuleBased,
   mergeClassification,
@@ -32,6 +32,49 @@ const MAX_BATCH_MESSAGES = 40
 const MAX_MESSAGE_CHARS = 400
 /** 一批最多接受多少条候选（learn_style 提示词要求 ≤10，留余量）。 */
 const MAX_CANDIDATES = 12
+/**
+ * 触发一轮学习所需的最小缓冲条数。
+ *
+ * 为什么要有这道下限：阈值计数是持久化的，重启后可能一上来就过线，但缓冲
+ * （内存里的对话窗口）是空的。拿两三句话去学，既学不出东西又白花一次模型调用。
+ */
+const MIN_BUFFER_FOR_LEARN = 6
+
+/**
+ * 人物画像两次更新之间的最小间隔（毫秒）。
+ *
+ * 为什么画像要单独节流（其余三项每轮都学）：画像是**账本**，记录「这个人是谁」，
+ * 它变化得慢；而每更新一次要一次完整模型调用（当前画像 + 新对话 → 六桶 JSON）。
+ * 跟着表达学习一起每 20 条跑一次，等于拿最贵的一次调用去干最不需要频繁干的事。
+ *
+ * 10 分钟对齐 MaiBot `profile_policy.py` 的刷新节奏（debounce 120s + queue 60s
+ * 在一个批次的尺度上，折算下来是分钟级，不是每条消息级）。
+ */
+const PROFILE_MIN_INTERVAL_MS = 10 * 60 * 1000
+
+/**
+ * 画像现在该不该刷新。
+ *
+ * 除了时间间隔，还有一条**内容**判据：距上次更新不足间隔，但已经攒了
+ * `learnEvery * 3` 条新消息时也放行——长时间连续聊天不该因为节流而让画像停在原地。
+ *
+ * @param {object} db
+ * @param {object} cfg
+ */
+function shouldRefreshProfile(db, cfg) {
+  let updatedAt = 0
+  try {
+    const current = getProfile(db, cfg.profilePersonId || 'local-user')
+    updatedAt = current ? Number(current.updatedAt) || 0 : 0
+  } catch {
+    return true
+  }
+  if (!updatedAt) return true
+  const age = Date.now() - updatedAt
+  if (age >= PROFILE_MIN_INTERVAL_MS) return true
+  const every = Math.max(1, Math.min(200, Number(cfg.learnEvery) || 20))
+  return readCounter(db, 'since_profile') >= every * 3
+}
 
 /**
  * 把消息列表渲染成学习提示词用的对话文本。
@@ -251,7 +294,6 @@ export function createLearner(ctx, db, getConfig) {
   /** 待学消息缓冲（滚动窗口）。 */
   let buffer = []
   let running = false
-  let sinceLastLearn = 0
   /** 已分配的消息自增 id（用于提示词里的 [id:N]）。 */
   let nextId = 1
 
@@ -282,14 +324,19 @@ export function createLearner(ctx, db, getConfig) {
       if (cfg.learnImpression) {
         await learnImpression(ctx, db, batch, { session })
       }
-      if (cfg.learnProfile) {
-        await learnProfile(ctx, db, batch, {
+      if (cfg.learnProfile && shouldRefreshProfile(db, cfg)) {
+        const res = await learnProfile(ctx, db, batch, {
           session,
           personId: cfg.profilePersonId || 'local-user',
           primaryName: cfg.profilePrimaryName || '用户',
           aliases: cfg.aliases,
           maxTokens: cfg.learnMaxTokens,
         })
+        // 只有真写了才清计数；模型没给出有效六桶时不推进节流窗口，
+        // 下一轮还能再试（否则一次失败要等 10 分钟）。
+        if (res && res.updated) {
+          try { setCounter(db, 'since_profile', 0) } catch { /* 记账失败不影响学习 */ }
+        }
       }
     } catch (error) {
       // 后台学习失败只记日志，不向会话抛（否则会把失败冒泡成对话错误）
@@ -299,21 +346,37 @@ export function createLearner(ctx, db, getConfig) {
       logLearning(db, { kind: 'learn', ok: false, detail: String((error && error.message) || error) })
     } finally {
       running = false
-      sinceLastLearn = 0
+      // 学完清零**持久化**的计数（旧版清的是内存变量，重启即归零，导致
+      // 断断续续聊天永远攒不到阈值——2026-10-26 修）。
+      try { setCounter(db, 'since_learn', 0) } catch { /* 记账失败不影响学习 */ }
     }
   }
 
   return {
-    /** 记一条用户消息；够了阈值就触发一轮学习（不等待）。 */
+    /**
+     * 记一条用户消息；够了阈值就触发一轮学习（不等待）。
+     *
+     * 阈值走**持久化**计数（`since_learn`），不走来内存变量。原因：内存计数在
+     * DSH 重启后归零，而 DSH 常被随手重启，于是「聊够 20 条」这件事永远攒不满，
+     * 学习一次都不触发——这是「感觉没起作用」的头号原因。
+     *
+     * 另加一道下限：缓冲里至少要有 MIN_BUFFER_FOR_LEARN 条才值得花一次模型调用。
+     * 刚重启时缓冲是空的，即便计数过线也先攒着，避免拿两句话去学。
+     */
     onUserMessage(session, text) {
       push('user', text)
-      sinceLastLearn += 1
+      let since = 0
+      try {
+        since = bumpCounter(db, 'since_learn', 1)
+        bumpCounter(db, 'since_profile', 1)
+      } catch { since = 0 }
       const cfg = getConfig()
       const every = Math.max(1, Math.min(200, Number(cfg.learnEvery) || 20))
-      if (cfg.enabled && cfg.learning && sinceLastLearn >= every) {
-        // 故意不 await：学习是后台任务，不能拖慢对话回合
-        void runOnce(session)
-      }
+      if (!cfg.enabled || !cfg.learning) return
+      if (since < every) return
+      if (buffer.length < MIN_BUFFER_FOR_LEARN) return
+      // 故意不 await：学习是后台任务，不能拖慢对话回合
+      void runOnce(session)
     },
     /** 记一条自己的回复（供学习时区分 SELF，避免学自己）。 */
     onAssistantMessage(text) {

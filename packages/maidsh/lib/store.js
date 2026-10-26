@@ -150,6 +150,14 @@ export function readCounter(db, key) {
   return row ? Number(row.value) : 0
 }
 
+/** 直接写一个计数器（用于学习完成后清零）。 */
+export function setCounter(db, key, value) {
+  db.prepare(
+    'INSERT INTO counters (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+  ).run(key, Number(value) || 0)
+  return Number(value) || 0
+}
+
 /**
  * 写入一条表达方式。已存在同 style 时提升权重而不是插入重复行。
  * @returns {boolean} 是否为新条目
@@ -169,12 +177,90 @@ export function addExpression(db, { situation, style, sourceText = '', session =
   return true
 }
 
-/** 按权重取前 N 条表达方式（供注入）。 */
+/** 按权重取前 N 条表达方式（供面板列表用）。 */
 export function topExpressions(db, limit = 8) {
   return db
     .prepare('SELECT id, situation, style, weight, hits FROM expressions ORDER BY weight DESC, hits DESC, id DESC LIMIT ?')
     .all(Math.max(1, Math.min(50, Number(limit) || 8)))
     .map((r) => ({ id: Number(r.id), situation: String(r.situation), style: String(r.style), weight: Number(r.weight), hits: Number(r.hits) }))
+}
+
+/**
+ * 把 weight 线性映射到 [1, 5] —— MaiBot `learners/weighted_sampling.py::_compute_weights` 的等价物。
+ *
+ * 为什么不全用原始 weight：学习时每重复出现一次表达就 +0.5，长期跑下去权重会发散，
+ * 少数老句式会把新学的挤掉。映射到定长区间后「老手」最多比「新手」占优 5 倍，
+ * 新表达始终有出头机会——这正是 MaiBot 保留的意图。
+ *
+ * @param {Array<{weight: number}>} rows
+ */
+export function computeSamplingWeights(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return []
+  const ws = rows.map((r) => Math.max(0, Number(r.weight) || 0))
+  const min = Math.min(...ws)
+  const max = Math.max(...ws)
+  if (max === min) return ws.map(() => 1)
+  return ws.map((w) => 1 + ((w - min) / (max - min)) * 4)
+}
+
+/**
+ * 加权随机抽 N 条表达方式（供注入）—— MaiBot `weighted_sample` 的等价物。
+ *
+ * 与 `topExpressions` 的分工：那个是「排行榜」（面板要看稳定顺序），这个是
+ * 「抽签」（要注入给模型的）——**每次抽的结果都不一样**。这正是原先的欠缺：
+ * 永远注入权重最高的固定 8 条，聊久了来来回回就那几句，人味反而没了。
+ *
+ * 与 MaiBot 的一处差异：它在每一轮抽签后**重算**权重（因为总体变小了，
+ * min/max 跟着变），于是同一批数据在多轮之间权重还会漂移。这里只在开头算一次，
+ * 之后按固定权重做无放回轮盘赌——结果更可预期，抽样分布也更接近直觉。
+ *
+ * @param {object} db
+ * @param {number} limit 抽几条
+ * @param {() => number} [rng] 随机源（测试注入用）
+ */
+export function sampleExpressions(db, limit = 8, rng = Math.random) {
+  const n = Math.max(1, Math.min(50, Number(limit) || 8))
+  const rows = db
+    .prepare('SELECT id, situation, style, weight, hits FROM expressions')
+    .all()
+    .map((r) => ({ id: Number(r.id), situation: String(r.situation), style: String(r.style), weight: Number(r.weight), hits: Number(r.hits) }))
+  if (rows.length <= n) return shuffle(rows, rng)
+  const weights = computeSamplingWeights(rows)
+  const pool = rows.map((row, i) => ({ row, w: weights[i] }))
+  const picked = []
+  while (picked.length < n && pool.length > 0) {
+    const total = pool.reduce((s, p) => s + p.w, 0)
+    let r = rng() * total
+    let idx = pool.length - 1
+    for (let i = 0; i < pool.length; i += 1) {
+      r -= pool[i].w
+      if (r <= 0) {
+        idx = i
+        break
+      }
+    }
+    picked.push(pool[idx].row)
+    pool.splice(idx, 1)
+  }
+  return picked
+}
+
+/**
+ * Fisher-Yates 洗牌（不改原数组）。
+ * @template T
+ * @param {T[]} arr
+ * @param {() => number} rng
+ * @returns {T[]}
+ */
+function shuffle(arr, rng) {
+  const copy = arr.slice()
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1))
+    const tmp = copy[i]
+    copy[i] = copy[j]
+    copy[j] = tmp
+  }
+  return copy
 }
 
 /** 标记表达方式被用过一次。 */
@@ -289,6 +375,11 @@ export function stats(db) {
     learnRuns: one("SELECT COUNT(*) FROM learn_log WHERE kind = 'learn'"),
     userMessages: readCounter(db, 'user_messages'),
     learnedNew: readCounter(db, 'learned_new'),
+    // 距下一轮学习还差几条——面板要能回答「它到底在不在动」，
+    // 光有总数看不出进度，这也是「感觉没起作用」的一部分。
+    sinceLearn: readCounter(db, 'since_learn'),
+    // 人物画像上次更新时间（毫秒时间戳，0 = 从未更新）
+    profileUpdatedAt: one('SELECT COALESCE(MAX(updated_at), 0) FROM person_profile'),
   }
 }
 
