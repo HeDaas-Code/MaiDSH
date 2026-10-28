@@ -59,6 +59,7 @@ window.__ModuleLoader__.load({
       ['injectImpression', '注入聊天印象', '最近对话的自然语言概括'],
       ['injectJargon', '注入黑话表', '让模型看得懂圈内说法'],
       ['injectProfile', '注入人物画像', '这人是谁：身份/关系/偏好/雷点'],
+      ['chatThinkingChain', '对话思维链', '对话先判断再动手（仿 maibot planner），其他场景照旧原生链'],
     ]
 
     const LEARN_TOGGLES = [
@@ -225,6 +226,26 @@ window.__ModuleLoader__.load({
                 ),
               ),
             ),
+          ),
+        ),
+
+        React.createElement('div', { className: 'ms-title' }, '对话思维链'),
+        React.createElement('div', { className: 'ms-card' },
+          React.createElement(Field, {
+            label: '思维链提示词',
+            hint: '只在对话回合的第一步注入；工具步骤、子 agent 不套这层。默认文案迁移自 MaiBot maisaka planner（先判断局面、再决定动不动手）。',
+          }, React.createElement('textarea', {
+            rows: 6, value: s.chatThinkingPrompt,
+            onChange: (e) => set({ chatThinkingPrompt: e.target.value }),
+          })),
+          React.createElement('div', { className: 'ms-row' },
+            React.createElement(Field, {
+              label: '连续沉默几轮后提醒',
+              hint: '连着这么多轮都结束回合没说话，下一轮开场追加一句「别已读不回」。0 = 不提醒。',
+            }, React.createElement('input', {
+              type: 'number', min: 0, max: 50, value: s.chatWaitReminderAfter, style: { width: 90 },
+              onChange: (e) => set({ chatWaitReminderAfter: Number(e.target.value) }),
+            })),
           ),
         ),
 

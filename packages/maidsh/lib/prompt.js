@@ -161,6 +161,37 @@ export function renderAnchor(cfg) {
 }
 
 /**
+ * 对话思维链块 —— 迁移自 MaiBot maisaka planner 的「先判断再动手」。
+ *
+ * 只在该回合的**第一步**注入（isFirstStep 为真），因为思维链的意义就是「开场先想，
+ * 想完再动」；工具步骤、子 agent 都是「已经动起来之后的执行」，套这层反而干扰。
+ *
+ * 连续多轮结束回合不说话时（silentStreak 达阈值）追加一句别已读不回；没话说则
+ * 追加「不想说就结束回合，别用一段话表达不想说」——治「计划憋成正文」。
+ *
+ * @param {object} cfg
+ * @param {{isFirstStep?: boolean, silentStreak?: number}} [ctx]
+ * @returns {string}
+ */
+export function renderThinkingChain(cfg, ctx) {
+  if (!cfg || cfg.chatThinkingChain !== true) return ''
+  if (!ctx || ctx.isFirstStep === false) return ''
+  const body = typeof cfg.chatThinkingPrompt === 'string' ? cfg.chatThinkingPrompt.trim() : ''
+  if (!body) return ''
+
+  const lines = [body]
+  const after = Number(cfg.chatWaitReminderAfter) || 0
+  const streak = Number(ctx.silentStreak) || 0
+  if (after > 0 && streak >= after && cfg.chatWaitReminder) {
+    lines.push('', String(cfg.chatWaitReminder).trim())
+  }
+  if (cfg.chatNoReplyHint) {
+    lines.push('', String(cfg.chatNoReplyHint).trim())
+  }
+  return lines.join('\n')
+}
+
+/**
  * 组装全部注入块。
  *
  * @param {object} params
@@ -171,9 +202,10 @@ export function renderAnchor(cfg) {
  * @param {Array} [params.impressions]
  * @param {object|null} [params.mood]
  * @param {string} [params.profileText] 完整人物画像文本
+ * @param {{isFirstStep?: boolean, silentStreak?: number}} [params.thinkingCtx] 对话思维链上下文
  * @returns {Array<{name: string, text: string}>} 待 push 的块
  */
-export function buildSections({ cfg, temporaryStyle, expressions, jargon, impressions, mood, profileText }) {
+export function buildSections({ cfg, temporaryStyle, expressions, jargon, impressions, mood, profileText, thinkingCtx }) {
   const sections = []
   // 显式判否而不是 `!cfg.enabled`：设定里缺字段时应默认「开启」，
   // 否则一次写入漏字段就让整个插件静默失效。
@@ -182,6 +214,11 @@ export function buildSections({ cfg, temporaryStyle, expressions, jargon, impres
   if (cfg.injectPersona) {
     const text = renderPersona(cfg)
     if (text) sections.push({ name: 'maidsh:persona', text })
+  }
+  // 思维链紧跟人格：它是「本轮怎么想」的框架，应排在风格/背景之前先定调。
+  if (cfg.chatThinkingChain === true) {
+    const text = renderThinkingChain(cfg, thinkingCtx)
+    if (text) sections.push({ name: 'maidsh:thinking-chain', text })
   }
   if (cfg.injectReplyStyle) {
     const text = renderReplyStyle(cfg, temporaryStyle)

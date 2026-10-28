@@ -21,6 +21,9 @@ import {
   DEFAULT_MULTIPLE_REPLY_STYLE,
   DEFAULT_NICKNAME,
   DEFAULT_ALIASES,
+  DEFAULT_CHAT_THINKING_PROMPT,
+  DEFAULT_CHAT_WAIT_REMINDER,
+  DEFAULT_CHAT_NO_REPLY_HINT,
 } from './defaults.js'
 
 /** 设定文件路径。 */
@@ -63,6 +66,21 @@ export function defaultSettings() {
     injectJargon: true,
     /** 注入人物画像（迁移自 MaiBot person_profile，描述「这个人是谁」）。 */
     injectProfile: true,
+
+    // ── 对话思维链（迁移自 MaiBot maisaka planner 流程）──
+    /**
+     * 对话时走「先判断再动手」的思维链（更像人聊天），其他场景走 DSH 原生思维链。
+     * 只在**对话回合的第一步**注入，工具步骤与子 agent 不套这层。
+     */
+    chatThinkingChain: false,
+    /** 思维链模式的提示词正文（可在设置页改）。 */
+    chatThinkingPrompt: DEFAULT_CHAT_THINKING_PROMPT,
+    /** 连续「结束回合不说话」达到多少轮后追加提醒（0 = 不提醒）。 */
+    chatWaitReminderAfter: 3,
+    /** 上面那句提醒的文本。 */
+    chatWaitReminder: DEFAULT_CHAT_WAIT_REMINDER,
+    /** 思维链模式下的「不想说话就结束回合」收口提示。 */
+    chatNoReplyHint: DEFAULT_CHAT_NO_REPLY_HINT,
 
     // ── 学习 ──
     /** 学习总开关。 */
@@ -138,6 +156,12 @@ export function normalizeSettings(input) {
     injectImpression: bool(raw.injectImpression, d.injectImpression),
     injectJargon: bool(raw.injectJargon, d.injectJargon),
     injectProfile: bool(raw.injectProfile, d.injectProfile),
+
+    chatThinkingChain: bool(raw.chatThinkingChain, d.chatThinkingChain),
+    chatThinkingPrompt: str(raw.chatThinkingPrompt, d.chatThinkingPrompt, 4000),
+    chatWaitReminderAfter: Math.floor(num(raw.chatWaitReminderAfter, d.chatWaitReminderAfter, 0, 50)),
+    chatWaitReminder: str(raw.chatWaitReminder, d.chatWaitReminder, 1000),
+    chatNoReplyHint: str(raw.chatNoReplyHint, d.chatNoReplyHint, 1000),
 
     learning: bool(raw.learning, d.learning),
     learnExpressions: bool(raw.learnExpressions, d.learnExpressions),

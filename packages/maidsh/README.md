@@ -106,6 +106,7 @@ MaiBot 的画像从「证据池」重建（向量召回 + 关系边 + 记忆特�
 | 块名 | 内容 | 开关 |
 |---|---|---|
 | `maidsh:persona` | 名字 + 人格 + 行为风格 + 「你是你自己，不是助手」 | `injectPersona` |
+| `maidsh:thinking-chain` | 对话思维链（先判断再动手），**仅本回合第一步注入** | `chatThinkingChain` |
 | `maidsh:reply-style` | 表达风格 + 口语化要求 +（可选）本轮备用风格 | `injectReplyStyle` |
 | `maidsh:expression-habits` | 学到的「当 A 时可以用 B」清单 | `injectExpressions` |
 | `maidsh:mood` | 当前情绪（三档强度，不暴露精确值） | `injectMood` |
@@ -117,6 +118,14 @@ MaiBot 的画像从「证据池」重建（向量召回 + 关系边 + 记忆特�
 `maidsh:anchor` 排在最末是有意的：系统提示词越长，越靠前的内容在生成时越被稀释。前面的人格块隔着黑话、心情、画像，等真正落笔时权重已经掉下去了——技术长答尤其明显，一展开就回到「助手腔」。末尾这条只复述三条最容易破的规则（你是本人、不排版、有脾气），成本约 60 token。
 
 `maidsh:profile` 放在锚点之前：它是背景信息，越靠近回复指令越容易被模型当成立即要执行的事。
+
+### 对话思维链（`chatThinkingChain`）
+
+迁移自 MaiBot `prompts/zh-CN/maisaka_chat.prompt` 的 planner 流程：**收到消息先在心里过一遍（什么意思、什么态度、要不要接、怎么接），再决定动手**，而不是一上来就码字。这是「像人聊天」和「客服应答」的分界——人收到消息先想再开口。
+
+只在**对话回合的第一步**注入（`buildSections` 里靠 `thinkingCtx.isFirstStep = step===1` 判定）。工具步骤、子 agent 是「已经动起来之后的执行」，套这层只会干扰它们的推理，所以一直走 DSH 原生链——正好对上「其他时候走正常思维链」的要求。`step` 在每次 `system-prompt/assemble` 自增、`turn/end` 归零。
+
+它真正的内核不是「多说」，是「可以不说话」：判断这步没什么可做的就直接结束回合。为了治「把计划憋成正文」（用一大段话表达「我不打算回复」），块末常挂一条收口提示 `chatNoReplyHint`：不想说就结束，别用一段话表达不想说。连续 `chatWaitReminderAfter` 轮都结束回合没开口，下一轮第一步追加 `chatWaitReminder` 提醒别已读不回——不然「可以不说话」会退化成永远不说话。
 
 两条**宿主契约**（踩过坑，写进代码注释了）：
 
@@ -150,7 +159,7 @@ bundle 自带的 `cordis.patch.yml` 会让 loader 自动 insert 一条 entry（`
 ## 开发
 
 ```bash
-node test/integration.mjs    # 13 个用例：事件过滤 / 注入块 / 学习链路 / 持久化
+node test/integration.mjs    # 34 个用例：事件过滤 / 注入块 / 思维链 / 学习链路 / 持久化
 ```
 
 测试用**真实会话事件的形状**（从 `sessions/*.jsonl.zstd` 实测：`user/message` 的 `source.kind` 有 `user` / `runtime-context` / `time-context` / `skill-catalog` 四种，只有 `user` 才算用户输入）驱动 `apply()`，替身 ctx 顶掉 webServer 与 llm。

@@ -657,6 +657,98 @@ test('非回环来源拒绝访问面板（避免局域网里被读到画像）',
   assert.ok(status === 403 || status === 404, '非回环来源必须被拒，实际: ' + status)
 })
 
+// ── 对话思维链 ─────────────────────────────────────────────────────
+test('思维链关闭时：任何 step 都不注入 thinking-chain 块', async () => {
+  const ctx = makeCtx({ replies: defaultReplies })
+  plugin.apply(ctx)
+  const s = settingsMod.createSettingsStore()
+  s.write({ chatThinkingChain: false })
+  const assemble = ctx.__listeners.get('system-prompt/assemble')
+  const a1 = { contexts: [] }
+  await assemble(a1, { agent: { session: { id: 'sess-think-off' } } }, () => {})
+  const names = a1.contexts.map((c) => c.name)
+  assert.ok(!names.includes('maidsh:thinking-chain'), '关掉不该有思维链块: ' + names.join(','))
+})
+
+test('思维链开启：仅本回合第一步注入，第二步（工具后）不再注入', async () => {
+  const ctx = makeCtx({ replies: defaultReplies })
+  plugin.apply(ctx)
+  const s = settingsMod.createSettingsStore()
+  s.write({ chatThinkingChain: true })
+  const fire = ctx.__listeners.get('session/event')
+  const assemble = ctx.__listeners.get('system-prompt/assemble')
+  const session = { id: 'sess-think-on' }
+  fire(session, userEvent('在吗'))
+  const step1 = { contexts: [] }
+  await assemble(step1, { agent: { session } }, () => {})
+  const step2 = { contexts: [] }
+  await assemble(step2, { agent: { session } }, () => {})
+  const namesOf = (a) => a.contexts.map((c) => c.name)
+  assert.ok(namesOf(step1).includes('maidsh:thinking-chain'), '第一步应有思维链: ' + namesOf(step1).join(','))
+  assert.ok(!namesOf(step2).includes('maidsh:thinking-chain'), '第二步不该有思维链: ' + namesOf(step2).join(','))
+  // 思维链紧跟人格之后
+  assert.equal(namesOf(step1)[1], 'maidsh:thinking-chain', '思维链应排在人格块之后: ' + namesOf(step1).join(','))
+})
+
+test('思维链进入下一回合（新的用户消息）后重新注入', async () => {
+  const ctx = makeCtx({ replies: defaultReplies })
+  plugin.apply(ctx)
+  const s = settingsMod.createSettingsStore()
+  s.write({ chatThinkingChain: true })
+  const fire = ctx.__listeners.get('session/event')
+  const assemble = ctx.__listeners.get('system-prompt/assemble')
+  const session = { id: 'sess-think-turn' }
+  fire(session, userEvent('第一句'))
+  await assemble({ contexts: [] }, { agent: { session } }, () => {})
+  await assemble({ contexts: [] }, { agent: { session } }, () => {}) // 第二动，无思维链
+  fire(session, userEvent('第二句'))
+  const a = { contexts: [] }
+  await assemble(a, { agent: { session } }, () => {})
+  assert.ok(a.contexts.map((c) => c.name).includes('maidsh:thinking-chain'), '新回合第一步应重新注入')
+})
+
+test('连续沉默达阈值后：下回合第一步注入提醒语', async () => {
+  const ctx = makeCtx({ replies: defaultReplies })
+  plugin.apply(ctx)
+  const s = settingsMod.createSettingsStore()
+  s.write({ chatThinkingChain: true, chatWaitReminderAfter: 1, chatWaitReminder: '别已读不回啦' })
+  const fire = ctx.__listeners.get('session/event')
+  const assemble = ctx.__listeners.get('system-prompt/assemble')
+  const session = { id: 'sess-think-silent' }
+  // 第一回合：用户说话，攒够两步却始终没开口 → 静默一轮
+  fire(session, userEvent('喂'))
+  await assemble({ contexts: [] }, { agent: { session } }, () => {})
+  await assemble({ contexts: [] }, { agent: { session } }, () => {})
+  fire(session, { type: 'turn/end', seq: 0, time: Date.now(), data: {} })
+  // 第二回合第一步应带提醒
+  fire(session, userEvent('还在吗'))
+  const a = { contexts: [] }
+  await assemble(a, { agent: { session } }, () => {})
+  const block = a.contexts.find((c) => c.name === 'maidsh:thinking-chain')
+  assert.ok(block, '应有思维链块')
+  assert.ok(block.text.includes('别已读不回啦'), '应带沉默提醒: ' + block.text)
+})
+
+test('开过口则沉默计数清零，不误报提醒', async () => {
+  const ctx = makeCtx({ replies: defaultReplies })
+  plugin.apply(ctx)
+  const s = settingsMod.createSettingsStore()
+  s.write({ chatThinkingChain: true, chatWaitReminderAfter: 1, chatWaitReminder: '别已读不回啦' })
+  const fire = ctx.__listeners.get('session/event')
+  const assemble = ctx.__listeners.get('system-prompt/assemble')
+  const session = { id: 'sess-think-spoke' }
+  fire(session, userEvent('喂'))
+  await assemble({ contexts: [] }, { agent: { session } }, () => {})
+  fire(session, assistantEvent('在呢'))
+  fire(session, { type: 'turn/end', seq: 0, time: Date.now(), data: {} })
+  fire(session, userEvent('好的'))
+  const a = { contexts: [] }
+  await assemble(a, { agent: { session } }, () => {})
+  const block = a.contexts.find((c) => c.name === 'maidsh:thinking-chain')
+  assert.ok(block, '应有思维链块')
+  assert.ok(!block.text.includes('别已读不回啦'), '开过口就不该提醒: ' + block.text)
+})
+
 for (const t of tests) {
   try {
     await t.fn()

@@ -124,7 +124,7 @@ export function apply(ctx) {
         const last = latestMood(db, sid)
         if (last) restored = { mood: last.mood, intensity: last.intensity, createdAt: last.createdAt }
       } catch { /* 读库失败就当没有 */ }
-      st = { mood: restored, tempStyle: '', turn: 0 }
+      st = { mood: restored, tempStyle: '', turn: 0, step: 0, silentStreak: 0 }
       sessions.set(key, st)
     }
     return st
@@ -183,6 +183,8 @@ export function apply(ctx) {
 
         const st = sessionState(sid)
         st.turn += 1
+        // 新用户回合开始：步数归零。思维链只看 step===1，靠这个判定「本回合第一动」。
+        st.step = 0
         bumpCounter(db, 'user_messages', 1)
 
         // 心情推进（只在用户回合算，保证回合内稳定）
@@ -207,7 +209,26 @@ export function apply(ctx) {
 
       if (event.type === 'assistant/message') {
         const text = extractText(event.data && event.data.message && event.data.message.content)
-        if (text) learner.onAssistantMessage(text)
+        if (text) {
+          learner.onAssistantMessage(text)
+          // 真正说出话了 —— 打断「连续不说话」计数，并标记本回合已经开过口。
+          try {
+            const s = sessionState(sid)
+            s.silentStreak = 0
+            s.saidThisTurn = true
+          } catch { /* 会话态取不到就跳过 */ }
+        }
+      }
+
+      // 回合结束：若本回合一句可见回复都没有，记一次「沉默」。阈值提醒在下一回合
+      // 第一步由 renderThinkingChain 读取。（宿主事件名确认是 turn/end。）
+      if (event.type === 'turn/end') {
+        try {
+          const s = sessionState(sid)
+          if (s.step > 1 && s.saidThisTurn !== true) s.silentStreak = (Number(s.silentStreak) || 0) + 1
+          s.saidThisTurn = false
+          s.step = 0
+        } catch { /* 静默 */ }
       }
     } catch (error) {
       // 事件处理绝不能把错误冒泡进会话流
@@ -224,6 +245,11 @@ export function apply(ctx) {
       if (cfg.enabled && assembly && Array.isArray(assembly.contexts)) {
         const sid = sessionIdOf(hostCtx && hostCtx.agent && hostCtx.agent.session)
         const st = sessionState(sid)
+        // 组装一次 = 模型某一步要发请求的前夜。step 在这里自增，用来判定「本回合第一动」：
+        // 思维链只给 step===1 注入，工具步骤/后续步走原生链。
+        st.step = (Number(st.step) || 0) + 1
+        // 走到第 2 步还不算「同一动」——真正回话的那步已经算 interacted，清沉默计数走
+        // assistant/message；这里只负责给思维链判断「是不是开场」。
         // 表达方式用**加权随机抽签**而不是取排行榜前 N：固定注入权重最高的那几条，
         // 聊久了句式会反复撞车。抽签让每次注入的语料不同（MaiBot weighted_sample 等价物）。
         //
@@ -243,7 +269,8 @@ export function apply(ctx) {
             profileText = profile ? profile.profileText : ''
           } catch { profileText = '' }
         }
-        const sections = buildSections({ cfg, temporaryStyle: st.tempStyle, expressions, jargon, impressions, mood, profileText })
+        const sections = buildSections({ cfg, temporaryStyle: st.tempStyle, expressions, jargon, impressions, mood, profileText,
+          thinkingCtx: { isFirstStep: st.step === 1, silentStreak: st.silentStreak || 0 } })
         for (const section of sections) assembly.contexts.push(section)
       }
     } catch (error) {
